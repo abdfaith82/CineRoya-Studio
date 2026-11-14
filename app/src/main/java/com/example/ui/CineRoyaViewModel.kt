@@ -241,13 +241,16 @@ class CineRoyaViewModel(
         viewModelScope.launch {
             _aiTaskState.value = AiTaskState.Running("جاري تأليف السيناريو وتقسيم المشاهد وهندسة الإضاءة وزوايا الكاميرا عبر Gemini AI...")
             try {
-                val storyboard = withTimeout(60_000L) {
+                val storyboard = withTimeout(95_000L) {
                     aiService.generateLongVideoStoryboard(
                         ideaPrompt = ideaPrompt,
                         genre = genre,
                         visualStyle = visualStyle,
                         requestedSceneCount = requestedScenes.coerceIn(3, 8),
-                        referenceBitmap = _referenceBitmap.value
+                        referenceBitmap = _referenceBitmap.value,
+                        onStatusUpdate = { statusAr ->
+                            _aiTaskState.value = AiTaskState.Running(statusAr)
+                        }
                     )
                 }
 
@@ -326,7 +329,7 @@ class CineRoyaViewModel(
                 _aiTaskState.value = AiTaskState.Completed("تم توليد المشروع ومشاهده السينمائية بنجاح!")
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Storyboard generation timed out", e)
-                _aiTaskState.value = AiTaskState.Failed("انتهت مهلة التوليد (60 ثانية). يرجى المحاولة مرة أخرى.")
+                _aiTaskState.value = AiTaskState.Failed("انتهت مهلة الاتصال بالذكاء الاصطناعي. يرجى التحقق من اتصال الإنترنت والمحاولة مجدداً.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -341,7 +344,7 @@ class CineRoyaViewModel(
             _aiTaskState.value = AiTaskState.Running("جاري توليد اللقطة الواقعية 8K وتطبيق زاوية الكاميرا والإضاءة للمشهد (${scene.title})... قد يستغرق 30-60 ثانية")
             try {
                 val refBmp = if (useReferencePhoto) _referenceBitmap.value else null
-                val bitmap = withTimeout(60_000L) {
+                val bitmap = withTimeout(75_000L) {
                     aiService.generatePhotorealisticSceneFrame(
                         scene = scene,
                         referenceBitmap = refBmp
@@ -355,7 +358,7 @@ class CineRoyaViewModel(
                 }
             } catch (e: TimeoutCancellationException) {
                 Log.e(TAG, "Scene frame generation timed out", e)
-                _aiTaskState.value = AiTaskState.Failed("انتهت مهلة توليد الصورة بعد 60 ثانية. يرجى المحاولة مجدداً.")
+                _aiTaskState.value = AiTaskState.Failed("انتهت مهلة توليد الصورة بعد 75 ثانية. يرجى المحاولة مجدداً.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
