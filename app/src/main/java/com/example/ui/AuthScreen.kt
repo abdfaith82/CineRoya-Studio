@@ -86,6 +86,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
+private fun resolveDefaultWebClientId(context: Context): String? {
+    val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
+    if (resId == 0) return null
+    return runCatching { context.getString(resId) }.getOrNull()?.takeIf { it.isNotBlank() }
+}
+
 fun attemptAutoSignIn(
     context: Context,
     credentialManager: CredentialManager,
@@ -93,13 +99,19 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
+    val firebaseReady = runCatching {
+        com.google.firebase.FirebaseApp.getApps(context).isNotEmpty()
+    }.getOrDefault(false)
+    if (!firebaseReady) {
+        onUnauthenticated()
+        return
+    }
     if (Firebase.auth.currentUser != null) {
         onAuthSuccess()
         return
     }
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
+    val clientId = resolveDefaultWebClientId(context)
+    if (clientId == null) {
         onUnauthenticated()
         return
     }
@@ -138,10 +150,17 @@ fun onGoogleSignInClicked(
     scope: CoroutineScope,
     onAuthCancelled: () -> Unit = {}
 ) {
-    val clientId = try {
-        context.getString(R.string.default_web_client_id)
-    } catch (e: Exception) {
-        onAuthError("إعدادات Google Sign-In غير مكتملة (default_web_client_id)")
+    val firebaseReady = runCatching {
+        com.google.firebase.FirebaseApp.getApps(context).isNotEmpty()
+    }.getOrDefault(false)
+    if (!firebaseReady) {
+        onAuthError("ملف google-services.json غير مدمج في هذه النسخة. يمكنك استخدام الدخول بدون حساب أو إعادة البناء مع google-services.json.")
+        return
+    }
+
+    val clientId = resolveDefaultWebClientId(context)
+    if (clientId == null) {
+        onAuthError("إعدادات Google Sign-In غير مكتملة (يرجى التأكد من ملف google-services.json).")
         return
     }
 

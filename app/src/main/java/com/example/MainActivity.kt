@@ -80,19 +80,29 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun CineRoyaAppNavigation() {
-    var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
+    val context = LocalContext.current
+    val isFirebaseInitialized = remember {
+        runCatching { com.google.firebase.FirebaseApp.getApps(context).isNotEmpty() }.getOrDefault(false)
+    }
+    var currentUser by remember {
+        mutableStateOf(if (isFirebaseInitialized) Firebase.auth.currentUser else null)
+    }
     var isGuestSession by rememberSaveable { mutableStateOf(false) }
 
-    DisposableEffect(Unit) {
-        val listener = FirebaseAuth.AuthStateListener { auth ->
-            currentUser = auth.currentUser
-            if (auth.currentUser != null) {
-                isGuestSession = false
+    DisposableEffect(isFirebaseInitialized) {
+        if (!isFirebaseInitialized) {
+            onDispose { }
+        } else {
+            val listener = FirebaseAuth.AuthStateListener { auth ->
+                currentUser = auth.currentUser
+                if (auth.currentUser != null) {
+                    isGuestSession = false
+                }
             }
-        }
-        Firebase.auth.addAuthStateListener(listener)
-        onDispose {
-            Firebase.auth.removeAuthStateListener(listener)
+            Firebase.auth.addAuthStateListener(listener)
+            onDispose {
+                Firebase.auth.removeAuthStateListener(listener)
+            }
         }
     }
 
@@ -100,7 +110,7 @@ fun CineRoyaAppNavigation() {
     if (user == null && !isGuestSession) {
         AuthScreen(
             onAuthSuccess = {
-                currentUser = Firebase.auth.currentUser
+                currentUser = if (isFirebaseInitialized) Firebase.auth.currentUser else null
                 isGuestSession = false
             },
             onContinueAsGuest = {
