@@ -232,10 +232,12 @@ class CineRoyaViewModel(
 
     private fun formatAiError(error: Exception, fallbackAr: String): String {
         val raw = error.localizedMessage.orEmpty()
-        return if (raw.contains("FirebaseApp is not initialized", ignoreCase = true) || !isFirebaseInitialized()) {
-            "ملف «google-services.json» غير مدمج في هذه النسخة، لذا خدمات Gemini AI متوقفة مؤقتاً. أضف الملف في مجلد app أو عبر سر GOOGLE_SERVICES_JSON في GitHub ثم أعد البناء، أو أنشئ مشروعاً يدوياً أدناه."
-        } else {
-            raw.ifBlank { fallbackAr }
+        return when {
+            raw.contains("FirebaseApp is not initialized", ignoreCase = true) || !isFirebaseInitialized() ->
+                "ملف google-services.json غير مدمج في هذه النسخة، لذا خدمات Gemini AI متوقفة مؤقتاً. أضف الملف في مجلد app أو عبر سر GOOGLE_SERVICES_JSON في GitHub ثم أعد البناء، أو أنشئ مشروعاً يدوياً أدناه."
+            raw.contains("App Check", ignoreCase = true) || raw.contains("403") ->
+                "فشل التحقق الأمني للتطبيق (Firebase App Check): $raw\nتأكد من استخدام أحدث نسخة APK بعد تحديث إعدادات reCAPTCHA App Check."
+            else -> raw.ifBlank { fallbackAr }
         }
     }
 
