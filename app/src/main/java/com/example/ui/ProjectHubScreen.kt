@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MovieFilter
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -83,11 +84,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.VideoProject
+import com.example.ui.components.AppCheckDiagnosticsDialog
 import com.example.ui.theme.CinemaGold
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCyan
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioObsidian
+import com.example.util.AppCheckDiagnostics
 import kotlin.math.roundToInt
 
 private data class StoryTemplate(
@@ -130,16 +133,22 @@ fun ProjectHubScreen(
     projectsState: DataUiState<List<VideoProject>>,
     aiTaskState: AiTaskState,
     referenceBitmap: android.graphics.Bitmap?,
+    appCheckDiagnostics: AppCheckDiagnostics? = null,
+    appCheckTestState: AppCheckTestUiState = AppCheckTestUiState.Idle,
     onSetReferenceBitmap: (android.graphics.Bitmap?) -> Unit,
     onGenerateProject: (ideaPrompt: String, genre: String, aspectRatio: String, visualStyle: String, sceneCount: Int) -> Unit,
     onCreateManualProject: (ideaPrompt: String, genre: String, aspectRatio: String, visualStyle: String, sceneCount: Int) -> Unit,
     onOpenProject: (VideoProject) -> Unit,
     onDeleteProject: (String) -> Unit,
     onClearAiState: () -> Unit,
+    onRefreshAppCheckDiagnostics: () -> Unit = {},
+    onSaveAndTestAppCheck: (modeOverride: String, customDebugToken: String, customSiteKey: String) -> Unit = { _, _, _ -> },
+    onClearAppCheckTestState: () -> Unit = {},
     onSignOutOrSwitchAccount: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var showAppCheckDialog by rememberSaveable { mutableStateOf(false) }
     var promptText by rememberSaveable {
         mutableStateOf("فيلم وثائقي سينمائي طويل يستكشف الجبال الصخرية والواجهات المنحوتة في العلا عند الغروب وتحت سماء الصحراء المرصعة بالنجوم، مع إضاءة ذهبية درامية.")
     }
@@ -218,39 +227,62 @@ fun ProjectHubScreen(
                         )
                     }
 
-                    if (isGuestMode) {
-                        OutlinedButton(
-                            onClick = onSignOutOrSwitchAccount,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("sign_out_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Login,
-                                contentDescription = stringResource(R.string.link_google_account),
-                                tint = CinemaGold,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.link_google_account),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = CinemaGold
-                            )
-                        }
-                    } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         IconButton(
-                            onClick = onSignOutOrSwitchAccount,
+                            onClick = {
+                                onClearAppCheckTestState()
+                                onRefreshAppCheckDiagnostics()
+                                showAppCheckDialog = true
+                            },
                             modifier = Modifier
                                 .clip(CircleShape)
                                 .background(StudioCard)
-                                .testTag("sign_out_button")
+                                .testTag("open_appcheck_diagnostics_btn")
                         ) {
                             Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Logout,
-                                contentDescription = stringResource(R.string.sign_out),
-                                tint = CinemaGold
+                                imageVector = Icons.Default.Security,
+                                contentDescription = "تشخيص وإعداد App Check",
+                                tint = StudioCyan
                             )
+                        }
+
+                        if (isGuestMode) {
+                            OutlinedButton(
+                                onClick = onSignOutOrSwitchAccount,
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("sign_out_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Login,
+                                    contentDescription = stringResource(R.string.link_google_account),
+                                    tint = CinemaGold,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.link_google_account),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = CinemaGold
+                                )
+                            }
+                        } else {
+                            IconButton(
+                                onClick = onSignOutOrSwitchAccount,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(StudioCard)
+                                    .testTag("sign_out_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.Logout,
+                                    contentDescription = stringResource(R.string.sign_out),
+                                    tint = CinemaGold
+                                )
+                            }
                         }
                     }
                 }
@@ -586,23 +618,59 @@ fun ProjectHubScreen(
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Row(
+                                    Column(
                                         modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text(
-                                            text = aiTaskState.errorMessage,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        IconButton(onClick = onClearAiState) {
-                                            Icon(
-                                                imageVector = Icons.Default.Close,
-                                                contentDescription = "إغلاق",
-                                                tint = MaterialTheme.colorScheme.error
+                                        Row(
+                                            verticalAlignment = Alignment.Top,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = aiTaskState.errorMessage,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.weight(1f)
                                             )
+                                            IconButton(onClick = onClearAiState) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "إغلاق",
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            }
+                                        }
+                                        if (aiTaskState.errorMessage.contains("App Check", ignoreCase = true) ||
+                                            aiTaskState.errorMessage.contains("reCAPTCHA", ignoreCase = true) ||
+                                            aiTaskState.errorMessage.contains("403")
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    onClearAppCheckTestState()
+                                                    onRefreshAppCheckDiagnostics()
+                                                    showAppCheckDialog = true
+                                                },
+                                                shape = RoundedCornerShape(10.dp),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .defaultMinSize(minHeight = 48.dp)
+                                                    .testTag("error_open_appcheck_btn")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Security,
+                                                    contentDescription = null,
+                                                    tint = CinemaGold,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "تشخيص وإعداد App Check ونسخ البصمة / الرمز",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = CinemaGold,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -753,6 +821,15 @@ fun ProjectHubScreen(
                     }
                 }
             }
+        }
+
+        if (showAppCheckDialog) {
+            AppCheckDiagnosticsDialog(
+                diagnostics = appCheckDiagnostics,
+                testState = appCheckTestState,
+                onSaveAndTest = onSaveAndTestAppCheck,
+                onDismiss = { showAppCheckDialog = false }
+            )
         }
     }
 }

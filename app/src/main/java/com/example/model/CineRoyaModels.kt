@@ -216,6 +216,8 @@ data class GeneratedVideo(
     val colorGradePreset: String = "CINEMATIC_GOLD",
     val thumbnailBase64: String = "",
     val localFilePath: String = "",
+    val videoUrl: String = "",
+    val mediaMimeType: String = "video/mp4",
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )

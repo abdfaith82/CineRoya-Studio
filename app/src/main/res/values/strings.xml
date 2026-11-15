@@ -116,5 +116,24 @@
     <string name="cinematic_templates_drawer_subtitle">اختر قالباً يضبط الإضاءة وحرارة اللون وحركة وزاوية الكاميرا بضغطة واحدة</string>
     <string name="apply_template_current_scene">تطبيق على المشهد</string>
     <string name="apply_template_all_scenes">تطبيق على الكل</string>
+
+    <!-- Video Preview & Playback Controls -->
+    <string name="preview_video_btn">تشغيل ومعاينة</string>
+    <string name="preview_mp4_btn">معاينة MP4</string>
+    <string name="preview_modal_title">معاينة الفيديو المُولّد</string>
+    <string name="preview_source_local_mp4">ملف MP4 مُصدّر محلياً</string>
+    <string name="preview_source_cloud_stream">بث فيديو AI من الخادم</string>
+    <string name="preview_source_ai_scenes">معاينة مشاهد AI التفاعلية</string>
+    <string name="playback_play">تشغيل</string>
+    <string name="playback_pause">إيقاف مؤقت</string>
+    <string name="playback_replay">إعادة التشغيل</string>
+    <string name="playback_seek_back_5s">ترجيع 5 ثوانٍ</string>
+    <string name="playback_seek_forward_5s">تقديم 5 ثوانٍ</string>
+    <string name="playback_mute_toggle">كتم الصوت</string>
+    <string name="playback_unmute_toggle">تفعيل الصوت</string>
+    <string name="playback_loop_toggle">تكرار التشغيل</string>
+    <string name="playback_speed_label">السرعة</string>
+    <string name="preview_fullscreen_btn">ملء الشاشة</string>
+    <string name="playback_retry_btn">إعادة المحاولة</string>
 </resources>
 

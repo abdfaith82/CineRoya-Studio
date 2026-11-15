@@ -90,6 +90,7 @@ object Mp4VideoExporter {
             }
             val totalFrames = sceneFrameCounts.sum().coerceAtLeast(1)
             var renderedFrames = 0
+            val ptsTracker = longArrayOf(0L)
 
             for ((sceneIdx, scene) in scenes.withIndex()) {
                 val framesInScene = sceneFrameCounts[sceneIdx]
@@ -115,7 +116,7 @@ object Mp4VideoExporter {
                         inputSurface.unlockCanvasAndPost(surfaceCanvas)
                     }
 
-                    drainEncoder(encoder, muxer, bufferInfo, endOfStream = false, onTrackAdded = { idx ->
+                    drainEncoder(encoder, muxer, bufferInfo, endOfStream = false, ptsFrameCounter = ptsTracker, onTrackAdded = { idx ->
                         trackIndex = idx
                         muxerStarted = true
                     }, currentTrackIndex = { trackIndex }, isMuxerStarted = { muxerStarted })
@@ -125,7 +126,7 @@ object Mp4VideoExporter {
                 }
             }
 
-            drainEncoder(encoder, muxer, bufferInfo, endOfStream = true, onTrackAdded = { idx ->
+            drainEncoder(encoder, muxer, bufferInfo, endOfStream = true, ptsFrameCounter = ptsTracker, onTrackAdded = { idx ->
                 trackIndex = idx
                 muxerStarted = true
             }, currentTrackIndex = { trackIndex }, isMuxerStarted = { muxerStarted })
@@ -156,6 +157,7 @@ object Mp4VideoExporter {
         muxer: MediaMuxer,
         bufferInfo: MediaCodec.BufferInfo,
         endOfStream: Boolean,
+        ptsFrameCounter: LongArray,
         onTrackAdded: (Int) -> Unit,
         currentTrackIndex: () -> Int,
         isMuxerStarted: () -> Boolean
@@ -164,6 +166,7 @@ object Mp4VideoExporter {
             encoder.signalEndOfInputStream()
         }
 
+        val frameDurationUs = 1_000_000L / FRAME_RATE
         while (true) {
             val status = encoder.dequeueOutputBuffer(bufferInfo, 10_000L)
             if (status == MediaCodec.INFO_TRY_AGAIN_LATER) {
@@ -184,7 +187,8 @@ object Mp4VideoExporter {
                     if (bufferInfo.size != 0 && isMuxerStarted()) {
                         encodedData.position(bufferInfo.offset)
                         encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                        bufferInfo.presentationTimeUs = System.nanoTime() / 1000L
+                        bufferInfo.presentationTimeUs = ptsFrameCounter[0] * frameDurationUs
+                        ptsFrameCounter[0] = ptsFrameCounter[0] + 1L
                         muxer.writeSampleData(currentTrackIndex(), encodedData, bufferInfo)
                     }
                 }

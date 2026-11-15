@@ -16,7 +16,12 @@ import com.example.model.ColorGradePreset
 import com.example.model.GeneratedVideo
 import com.example.model.VideoProject
 import com.example.model.VideoScene
+import com.example.util.AppCheckDiagnostics
+import com.example.util.AppCheckTokenVerification
 import com.example.util.Mp4VideoExporter
+import com.example.util.getAppCheckDiagnostics
+import com.example.util.updateUserAppCheckSettings
+import com.example.util.verifyAppCheckToken
 import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -61,10 +66,18 @@ sealed interface ExportMp4State {
     data class Error(val message: String) : ExportMp4State
 }
 
+sealed interface AppCheckTestUiState {
+    data object Idle : AppCheckTestUiState
+    data object Testing : AppCheckTestUiState
+    data class Success(val messageAr: String) : AppCheckTestUiState
+    data class Failed(val messageAr: String) : AppCheckTestUiState
+}
+
 class CineRoyaViewModel(
     private val repository: CineRoyaRepository?,
     private val isGuestMode: Boolean = false,
-    private val aiService: AiCinemaService = AiCinemaService()
+    private val aiService: AiCinemaService = AiCinemaService(),
+    private val appContext: Context? = null
 ) : ViewModel() {
 
     // Guest-mode local state (never touches Firestore when unauthenticated)
@@ -153,6 +166,14 @@ class CineRoyaViewModel(
     private val _exportState = MutableStateFlow<ExportMp4State>(ExportMp4State.Idle)
     val exportState: StateFlow<ExportMp4State> = _exportState.asStateFlow()
 
+    private val _appCheckDiagnostics = MutableStateFlow<AppCheckDiagnostics?>(
+        appContext?.let { runCatching { getAppCheckDiagnostics(it) }.getOrNull() }
+    )
+    val appCheckDiagnostics: StateFlow<AppCheckDiagnostics?> = _appCheckDiagnostics.asStateFlow()
+
+    private val _appCheckTestState = MutableStateFlow<AppCheckTestUiState>(AppCheckTestUiState.Idle)
+    val appCheckTestState: StateFlow<AppCheckTestUiState> = _appCheckTestState.asStateFlow()
+
     private var scenesObserverJob: Job? = null
 
     fun setReferenceBitmap(bitmap: Bitmap?) {
@@ -169,6 +190,46 @@ class CineRoyaViewModel(
 
     fun clearExportState() {
         _exportState.value = ExportMp4State.Idle
+    }
+
+    fun clearAppCheckTestState() {
+        _appCheckTestState.value = AppCheckTestUiState.Idle
+    }
+
+    fun refreshAppCheckDiagnostics(context: Context? = appContext) {
+        val ctx = context ?: return
+        _appCheckDiagnostics.value = runCatching { getAppCheckDiagnostics(ctx) }.getOrNull()
+    }
+
+    fun saveAndTestAppCheckSettings(
+        context: Context,
+        modeOverride: String,
+        customDebugToken: String,
+        customSiteKey: String
+    ) {
+        val appCtx = context.applicationContext
+        viewModelScope.launch {
+            _appCheckTestState.value = AppCheckTestUiState.Testing
+            updateUserAppCheckSettings(
+                context = appCtx,
+                modeOverride = modeOverride,
+                customDebugToken = customDebugToken,
+                customSiteKey = customSiteKey
+            )
+            refreshAppCheckDiagnostics(appCtx)
+
+            when (val verification = verifyAppCheckToken(appCtx, forceRefresh = true)) {
+                is AppCheckTokenVerification.Valid -> {
+                    _appCheckTestState.value = AppCheckTestUiState.Success(
+                        "تم التحقق من رمز App Check بنجاح (${verification.tokenPreview}). يمكنك الآن توليد الفيديو بالذكاء الاصطناعي."
+                    )
+                }
+                is AppCheckTokenVerification.Failed -> {
+                    _appCheckTestState.value = AppCheckTestUiState.Failed(verification.userMessageAr)
+                }
+            }
+            refreshAppCheckDiagnostics(appCtx)
+        }
     }
 
     fun openProject(project: VideoProject) {
@@ -230,13 +291,46 @@ class CineRoyaViewModel(
     private fun isFirebaseInitialized(): Boolean =
         runCatching { FirebaseApp.getInstance() }.isSuccess
 
+    private suspend fun ensureAppCheckReadyOrFail(): Boolean {
+        val ctx = appContext ?: return true
+        refreshAppCheckDiagnostics(ctx)
+        return when (val verification = verifyAppCheckToken(ctx, forceRefresh = false)) {
+            is AppCheckTokenVerification.Valid -> true
+            is AppCheckTokenVerification.Failed -> {
+                _aiTaskState.value = AiTaskState.Failed(verification.userMessageAr)
+                false
+            }
+        }
+    }
+
     private fun formatAiError(error: Exception, fallbackAr: String): String {
-        val raw = error.localizedMessage.orEmpty()
+        val chainText = generateSequence<Throwable>(error) { it.cause }
+            .mapNotNull { it.localizedMessage?.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString(" | ")
+        val raw = chainText.ifBlank { error.localizedMessage.orEmpty() }
+        val diag = appContext?.let { runCatching { getAppCheckDiagnostics(it) }.getOrNull() }
+
         return when {
             raw.contains("FirebaseApp is not initialized", ignoreCase = true) || !isFirebaseInitialized() ->
                 "ملف google-services.json غير مدمج في هذه النسخة، لذا خدمات Gemini AI متوقفة مؤقتاً. أضف الملف في مجلد app أو عبر سر GOOGLE_SERVICES_JSON في GitHub ثم أعد البناء، أو أنشئ مشروعاً يدوياً أدناه."
-            raw.contains("App Check", ignoreCase = true) || raw.contains("403") ->
-                "فشل التحقق الأمني للتطبيق (Firebase App Check): $raw\nتأكد من استخدام أحدث نسخة APK بعد تحديث إعدادات reCAPTCHA App Check."
+            raw.contains("App Check", ignoreCase = true) ||
+                raw.contains("App attestation", ignoreCase = true) ||
+                raw.contains("403") -> {
+                buildString {
+                    append("فشل التحقق الأمني للتطبيق (Firebase App Check): $raw\n")
+                    if (diag != null) {
+                        append("• المزوّد النشط: ${diag.activeModeLabelAr} | المشروع: ${diag.projectId}\n")
+                        if (diag.hasProjectMismatchWarning) {
+                            append("• السبب المرجح: ملف google-services.json لا يطابق مفتاح reCAPTCHA المدمج.\n")
+                        }
+                        append("• اضغط على زر «تشخيص وإعداد App Check» أدناه لفحص البصمة (SHA-1) أو تفعيل رمز Debug Token.")
+                    } else {
+                        append("افتح نافذة «تشخيص وإعداد App Check» للتحقق من المفتاح أو رمز التصحيح.")
+                    }
+                }
+            }
             else -> raw.ifBlank { fallbackAr }
         }
     }
@@ -374,6 +468,8 @@ class CineRoyaViewModel(
         }
 
         viewModelScope.launch {
+            _aiTaskState.value = AiTaskState.Running("جاري فحص التحقق الأمني App Check وتهيئة Gemini AI...")
+            if (!ensureAppCheckReadyOrFail()) return@launch
             _aiTaskState.value = AiTaskState.Running("جاري تأليف السيناريو وتقسيم المشاهد وهندسة الإضاءة وزوايا الكاميرا عبر Gemini AI...")
             try {
                 val storyboard = withTimeout(95_000L) {
@@ -482,6 +578,8 @@ class CineRoyaViewModel(
             return
         }
         viewModelScope.launch {
+            _aiTaskState.value = AiTaskState.Running("جاري فحص App Check وتوليد اللقطة الواقعية 8K للمشهد (${scene.title})...")
+            if (!ensureAppCheckReadyOrFail()) return@launch
             _aiTaskState.value = AiTaskState.Running("جاري توليد اللقطة الواقعية 8K وتطبيق زاوية الكاميرا والإضاءة للمشهد (${scene.title})... قد يستغرق 30-60 ثانية")
             try {
                 val refBmp = if (useReferencePhoto) _referenceBitmap.value else null
@@ -521,6 +619,8 @@ class CineRoyaViewModel(
         }
 
         viewModelScope.launch {
+            _aiTaskState.value = AiTaskState.Running("جاري فحص App Check وتوليد تسلسل موجهات الفيديو...")
+            if (!ensureAppCheckReadyOrFail()) return@launch
             _aiTaskState.value = AiTaskState.Running("جاري توليد وثيقة تسلسل موجهات الفيديو (Prompt Sequence) عبر Gemini AI...")
             try {
                 val doc = withTimeout(60_000L) {
@@ -556,6 +656,8 @@ class CineRoyaViewModel(
             return
         }
         viewModelScope.launch {
+            _aiTaskState.value = AiTaskState.Running("جاري فحص App Check وتحسين المشهد...")
+            if (!ensureAppCheckReadyOrFail()) return@launch
             _aiTaskState.value = AiTaskState.Running("جاري تحسين المشهد وضبط زاوية الكاميرا والإضاءة بالذكاء الاصطناعي...")
             try {
                 val updatedScene = withTimeout(60_000L) {
@@ -846,6 +948,22 @@ class CineRoyaViewModel(
         }
     }
 
+    suspend fun getScenesForPreview(projectId: String): List<VideoScene> {
+        if (projectId.isBlank()) return emptyList()
+        val currentOpenProject = _selectedProject.value
+        if (currentOpenProject?.id == projectId) {
+            val loaded = (_scenesState.value as? DataUiState.Success)?.data
+            if (!loaded.isNullOrEmpty()) return loaded
+        }
+        return if (isGuestMode || repository == null) {
+            (_guestScenesByProject.value[projectId] ?: emptyList())
+                .sortedBy { it.sceneIndex }
+                .map { applyCameraExtras(it) }
+        } else {
+            repository.getScenesForProject(projectId).map { applyCameraExtras(it) }
+        }
+    }
+
     private fun _projectsStateOrNull(): List<VideoProject>? =
         (projectsState.value as? DataUiState.Success)?.data
 
@@ -1123,12 +1241,14 @@ class CineRoyaViewModel(
 
         fun provideFactory(
             repository: CineRoyaRepository?,
-            isGuestMode: Boolean = false
+            isGuestMode: Boolean = false,
+            appContext: Context? = null
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 CineRoyaViewModel(
                     repository = repository,
-                    isGuestMode = isGuestMode
+                    isGuestMode = isGuestMode,
+                    appContext = appContext
                 )
             }
         }

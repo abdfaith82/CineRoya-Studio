@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.BackHandler
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MovieFilter
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
@@ -47,7 +50,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +72,10 @@ import androidx.core.content.FileProvider
 import com.example.R
 import com.example.model.ColorGradePreset
 import com.example.model.GeneratedVideo
+import com.example.model.VideoScene
+import com.example.ui.components.VideoPreviewModalDialog
+import com.example.ui.components.detectVideoSourceType
+import com.example.ui.components.resolvePlayableVideoUri
 import com.example.ui.theme.CinemaGold
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCyan
@@ -83,6 +94,8 @@ fun ProjectsGalleryScreen(
     onOpenVideoProject: (GeneratedVideo) -> Unit,
     onDeleteVideo: (String) -> Unit,
     onBackToHub: () -> Unit,
+    sceneBitmaps: Map<String, Bitmap> = emptyMap(),
+    onLoadScenesForPreview: suspend (String) -> List<VideoScene> = { emptyList() },
     modifier: Modifier = Modifier
 ) {
     BackHandler {
@@ -90,6 +103,68 @@ fun ProjectsGalleryScreen(
     }
 
     val context = LocalContext.current
+    var previewingVideo by remember { mutableStateOf<GeneratedVideo?>(null) }
+    var previewScenes by remember { mutableStateOf<List<VideoScene>>(emptyList()) }
+
+    LaunchedEffect(previewingVideo?.id, previewingVideo?.projectId) {
+        val target = previewingVideo
+        previewScenes = if (target != null && target.projectId.isNotBlank()) {
+            onLoadScenesForPreview(target.projectId)
+        } else {
+            emptyList()
+        }
+    }
+
+    fun shareMp4File(file: File) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(
+                Intent.createChooser(shareIntent, "مشاركة الفيديو السينمائي")
+            )
+        } catch (_: Exception) {}
+    }
+
+    val activePreviewVideo = previewingVideo
+    if (activePreviewVideo != null) {
+        val fallbackBmp = remember(activePreviewVideo.id, activePreviewVideo.thumbnailBase64) {
+            decodeThumbnailBitmap(activePreviewVideo.thumbnailBase64)
+        }
+        val playableUri = remember(activePreviewVideo.videoUrl, activePreviewVideo.localFilePath) {
+            resolvePlayableVideoUri(activePreviewVideo.videoUrl, activePreviewVideo.localFilePath)
+        }
+        val sourceType = remember(activePreviewVideo.videoUrl, activePreviewVideo.localFilePath) {
+            detectVideoSourceType(activePreviewVideo.videoUrl, activePreviewVideo.localFilePath)
+        }
+        val localFile = remember(activePreviewVideo.localFilePath) {
+            if (activePreviewVideo.localFilePath.isNotBlank()) {
+                File(activePreviewVideo.localFilePath).takeIf { it.exists() && it.length() > 0L }
+            } else {
+                null
+            }
+        }
+        VideoPreviewModalDialog(
+            title = activePreviewVideo.title,
+            aspectRatioCode = activePreviewVideo.aspectRatio,
+            sourceType = sourceType,
+            videoUri = playableUri,
+            fallbackThumbnail = fallbackBmp,
+            fallbackDurationSeconds = activePreviewVideo.durationSeconds,
+            scenes = previewScenes,
+            sceneBitmaps = sceneBitmaps,
+            onDismiss = { previewingVideo = null },
+            onEditInStudio = { onOpenVideoProject(activePreviewVideo) },
+            onShareVideo = localFile?.let { file -> { shareMp4File(file) } }
+        )
+    }
 
     Box(
         modifier = modifier
@@ -226,24 +301,9 @@ fun ProjectsGalleryScreen(
                         items(videos, key = { it.id }) { video ->
                             GeneratedVideoGalleryCard(
                                 video = video,
+                                onPreviewVideo = { previewingVideo = video },
                                 onOpenProject = { onOpenVideoProject(video) },
-                                onShareVideo = { file ->
-                                    try {
-                                        val uri = FileProvider.getUriForFile(
-                                            context,
-                                            "${context.packageName}.fileprovider",
-                                            file
-                                        )
-                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "video/mp4"
-                                            putExtra(Intent.EXTRA_STREAM, uri)
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        context.startActivity(
-                                            Intent.createChooser(shareIntent, "مشاركة الفيديو السينمائي")
-                                        )
-                                    } catch (_: Exception) {}
-                                },
+                                onShareVideo = { file -> shareMp4File(file) },
                                 onDelete = { onDeleteVideo(video.id) }
                             )
                         }
@@ -257,21 +317,13 @@ fun ProjectsGalleryScreen(
 @Composable
 private fun GeneratedVideoGalleryCard(
     video: GeneratedVideo,
+    onPreviewVideo: () -> Unit,
     onOpenProject: () -> Unit,
     onShareVideo: (File) -> Unit,
     onDelete: () -> Unit
 ) {
     val thumbnailBitmap = remember(video.id, video.thumbnailBase64) {
-        if (video.thumbnailBase64.isNotBlank()) {
-            try {
-                val bytes = Base64.decode(video.thumbnailBase64, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-            } catch (_: Exception) {
-                null
-            }
-        } else {
-            null
-        }
+        decodeThumbnailBitmap(video.thumbnailBase64)?.asImageBitmap()
     }
 
     val localFile = remember(video.localFilePath) {
@@ -296,7 +348,7 @@ private fun GeneratedVideoGalleryCard(
         modifier = Modifier
             .fillMaxWidth()
             .border(1.dp, StudioElevated, RoundedCornerShape(20.dp))
-            .clickable { onOpenProject() }
+            .clickable { onPreviewVideo() }
             .testTag("gallery_video_card_${video.id}")
     ) {
         Column {
@@ -311,6 +363,8 @@ private fun GeneratedVideoGalleryCard(
                             colors = listOf(Color(0xFF0F172A), Color(0xFF1E293B))
                         )
                     )
+                    .clickable { onPreviewVideo() }
+                    .testTag("gallery_play_thumbnail_${video.id}")
             ) {
                 if (thumbnailBitmap != null) {
                     Image(
@@ -404,16 +458,17 @@ private fun GeneratedVideoGalleryCard(
                     }
                 }
 
-                if (localFile != null) {
+                val hasCloudStream = video.videoUrl.isNotBlank()
+                if (localFile != null || hasCloudStream) {
                     Surface(
-                        color = StudioEmerald.copy(alpha = 0.9f),
+                        color = if (hasCloudStream) StudioCyan.copy(alpha = 0.9f) else StudioEmerald.copy(alpha = 0.9f),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(10.dp)
                     ) {
                         Text(
-                            text = "MP4 جاهز",
+                            text = if (hasCloudStream) "بث AI جاهز" else "MP4 جاهز",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = StudioObsidian,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -477,58 +532,106 @@ private fun GeneratedVideoGalleryCard(
                     )
                 }
 
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(
-                        onClick = onOpenProject,
+                    Button(
+                        onClick = onPreviewVideo,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CinemaGold,
+                            contentColor = StudioObsidian
+                        ),
                         shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                         modifier = Modifier
-                            .weight(1f)
-                            .testTag("gallery_open_project_${video.id}")
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 48.dp)
+                            .testTag("gallery_play_video_${video.id}")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Edit,
+                            imageVector = Icons.Default.PlayArrow,
                             contentDescription = null,
-                            tint = CinemaGold,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = stringResource(R.string.gallery_open_project),
-                            color = CinemaGold,
-                            maxLines = 1
+                            text = stringResource(R.string.preview_video_btn),
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    if (localFile != null) {
-                        Button(
-                            onClick = { onShareVideo(localFile) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = StudioEmerald,
-                                contentColor = StudioObsidian
-                            ),
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenProject,
                             shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .testTag("gallery_share_video_${video.id}")
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("gallery_open_project_${video.id}")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Share,
+                                imageVector = Icons.Default.Edit,
                                 contentDescription = null,
+                                tint = CinemaGold,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = stringResource(R.string.gallery_share_video),
-                                maxLines = 1
+                                text = stringResource(R.string.gallery_open_project),
+                                color = CinemaGold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                        }
+
+                        if (localFile != null) {
+                            Button(
+                                onClick = { onShareVideo(localFile) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = StudioEmerald,
+                                    contentColor = StudioObsidian
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("gallery_share_video_${video.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.gallery_share_video),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+private fun decodeThumbnailBitmap(base64Str: String): Bitmap? {
+    if (base64Str.isBlank()) return null
+    return try {
+        val bytes = Base64.decode(base64Str, Base64.DEFAULT)
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    } catch (_: Exception) {
+        null
     }
 }
 

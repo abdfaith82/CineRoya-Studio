@@ -7,6 +7,7 @@ import com.example.model.VideoProject
 import com.example.model.VideoScene
 import com.example.util.OperationType
 import com.example.util.handleFirestoreError
+import com.example.util.resolveFirestoreDatabaseId
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
@@ -26,7 +27,7 @@ class CineRoyaRepository(private val db: FirebaseFirestore) {
 
     constructor(context: Context) : this(
         FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
+            resolveFirestoreDatabaseId(context.applicationContext)
         )
     )
 
@@ -194,6 +195,27 @@ class CineRoyaRepository(private val db: FirebaseFirestore) {
         )
     }
 
+    suspend fun getScenesForProject(projectId: String): List<VideoScene> {
+        val uid = auth.currentUser?.uid ?: return emptyList()
+        val path = "users/$uid/projects/$projectId/scenes"
+        return try {
+            val snap = db.collection("users").document(uid)
+                .collection("projects").document(projectId)
+                .collection("scenes")
+                .get()
+                .await()
+            snap.toObjects(
+                VideoScene::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            ).sortedBy { it.sceneIndex }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, path)
+            emptyList()
+        }
+    }
+
     suspend fun createScene(
         projectId: String,
         scene: VideoScene
@@ -324,7 +346,8 @@ class CineRoyaRepository(private val db: FirebaseFirestore) {
         sceneCount: Long,
         colorGradePreset: String,
         thumbnailBase64: String,
-        localFilePath: String
+        localFilePath: String,
+        videoUrl: String = ""
     ): Result<String> {
         val uid = requireUserId()
         val docRef = db.collection("users").document(uid)
@@ -340,6 +363,8 @@ class CineRoyaRepository(private val db: FirebaseFirestore) {
             "colorGradePreset" to colorGradePreset.take(80).ifBlank { "CINEMATIC_GOLD" },
             "thumbnailBase64" to thumbnailBase64.take(120_000),
             "localFilePath" to localFilePath.take(500),
+            "videoUrl" to videoUrl.take(1000),
+            "mediaMimeType" to "video/mp4",
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
         )

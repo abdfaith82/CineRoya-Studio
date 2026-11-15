@@ -55,6 +55,7 @@ import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioObsidian
 import com.example.util.configureAppCheck
+import com.example.util.resolveFirestoreDatabaseId
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
@@ -146,20 +147,22 @@ private fun StudioSessionContainer(
         key = sessionKey,
         factory = viewModelFactory {
             initializer {
+                val app = checkNotNull(this[APPLICATION_KEY]) {
+                    "APPLICATION_KEY missing from CreationExtras"
+                }
                 if (isGuestMode) {
                     CineRoyaViewModel(
                         repository = null,
-                        isGuestMode = true
+                        isGuestMode = true,
+                        appContext = app
                     )
                 } else {
-                    val app = checkNotNull(this[APPLICATION_KEY]) {
-                        "APPLICATION_KEY missing from CreationExtras"
-                    }
-                    val databaseId = app.getString(R.string.firestore_database_id)
+                    val databaseId = resolveFirestoreDatabaseId(app)
                     val db = FirebaseFirestore.getInstance(databaseId)
                     CineRoyaViewModel(
                         repository = CineRoyaRepository(db),
-                        isGuestMode = false
+                        isGuestMode = false,
+                        appContext = app
                     )
                 }
             }
@@ -176,6 +179,8 @@ private fun StudioSessionContainer(
     val aiTaskState by viewModel.aiTaskState.collectAsStateWithLifecycle()
     val promptSequenceText by viewModel.promptSequenceText.collectAsStateWithLifecycle()
     val exportState by viewModel.exportState.collectAsStateWithLifecycle()
+    val appCheckDiagnostics by viewModel.appCheckDiagnostics.collectAsStateWithLifecycle()
+    val appCheckTestState by viewModel.appCheckTestState.collectAsStateWithLifecycle()
 
     // 0 = Studio Hub / Create, 1 = Projects Gallery (Generated Videos)
     var rootTabIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -237,12 +242,19 @@ private fun StudioSessionContainer(
                     projectsState = projectsState,
                     aiTaskState = aiTaskState,
                     referenceBitmap = referenceBitmap,
+                    appCheckDiagnostics = appCheckDiagnostics,
+                    appCheckTestState = appCheckTestState,
                     onSetReferenceBitmap = viewModel::setReferenceBitmap,
                     onGenerateProject = viewModel::generateFullAiProjectFromPrompt,
                     onCreateManualProject = viewModel::createManualProjectFromIdea,
                     onOpenProject = viewModel::openProject,
                     onDeleteProject = viewModel::deleteProject,
                     onClearAiState = viewModel::clearAiTaskState,
+                    onRefreshAppCheckDiagnostics = { viewModel.refreshAppCheckDiagnostics(context) },
+                    onSaveAndTestAppCheck = { mode, debugTok, siteKey ->
+                        viewModel.saveAndTestAppCheckSettings(context, mode, debugTok, siteKey)
+                    },
+                    onClearAppCheckTestState = viewModel::clearAppCheckTestState,
                     onSignOutOrSwitchAccount = {
                         if (isGuestMode) {
                             onExitGuestMode()
@@ -261,6 +273,8 @@ private fun StudioSessionContainer(
                     },
                     onDeleteVideo = viewModel::deleteGeneratedVideo,
                     onBackToHub = { rootTabIndex = 0 },
+                    sceneBitmaps = sceneBitmaps,
+                    onLoadScenesForPreview = viewModel::getScenesForPreview,
                     modifier = Modifier.padding(innerPadding)
                 )
             }
@@ -296,7 +310,14 @@ private fun StudioSessionContainer(
                 viewModel.closeProject()
                 rootTabIndex = 1
             },
-            onBackToHub = viewModel::closeProject
+            onBackToHub = viewModel::closeProject,
+            appCheckDiagnostics = appCheckDiagnostics,
+            appCheckTestState = appCheckTestState,
+            onRefreshAppCheckDiagnostics = { viewModel.refreshAppCheckDiagnostics(context) },
+            onSaveAndTestAppCheck = { mode, debugTok, siteKey ->
+                viewModel.saveAndTestAppCheckSettings(context, mode, debugTok, siteKey)
+            },
+            onClearAppCheckTestState = viewModel::clearAppCheckTestState
         )
     }
 }

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,6 +19,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,6 +45,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
@@ -52,12 +56,16 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.MovieCreation
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOn
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -124,19 +132,26 @@ import com.example.model.ColorGradePreset
 import com.example.model.TransitionPreset
 import com.example.model.VideoProject
 import com.example.model.VideoScene
+import com.example.ui.components.AppCheckDiagnosticsDialog
 import com.example.ui.components.CinemaViewportStage
 import com.example.ui.components.InteractiveLightingRigRadar
+import com.example.ui.components.VideoPreviewModalDialog
+import com.example.ui.components.VideoPreviewSourceType
+import com.example.ui.components.formatMediaTimeMs
 import com.example.ui.theme.CinemaGold
 import com.example.ui.theme.StudioCard
 import com.example.ui.theme.StudioCyan
 import com.example.ui.theme.StudioElevated
 import com.example.ui.theme.StudioEmerald
 import com.example.ui.theme.StudioObsidian
+import com.example.util.AppCheckDiagnostics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
 import kotlin.math.roundToLong
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StudioEditorScreen(
     project: VideoProject,
@@ -165,10 +180,16 @@ fun StudioEditorScreen(
     onClearAiState: () -> Unit,
     onClearExportState: () -> Unit,
     onOpenGalleryAfterExport: () -> Unit,
-    onBackToHub: () -> Unit
+    onBackToHub: () -> Unit,
+    appCheckDiagnostics: AppCheckDiagnostics? = null,
+    appCheckTestState: AppCheckTestUiState = AppCheckTestUiState.Idle,
+    onRefreshAppCheckDiagnostics: () -> Unit = {},
+    onSaveAndTestAppCheck: (modeOverride: String, customDebugToken: String, customSiteKey: String) -> Unit = { _, _, _ -> },
+    onClearAppCheckTestState: () -> Unit = {}
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerScope = rememberCoroutineScope()
+    var showAppCheckDialog by rememberSaveable { mutableStateOf(false) }
 
     BackHandler {
         if (drawerState.isOpen) {
@@ -181,7 +202,12 @@ fun StudioEditorScreen(
     val context = LocalContext.current
     var isPlaying by remember { mutableStateOf(false) }
     var playbackProgress by remember { mutableFloatStateOf(0f) }
+    var playbackSpeed by remember { mutableFloatStateOf(1f) }
+    var isLooping by remember { mutableStateOf(false) }
+    var isVoiceoverMuted by remember { mutableStateOf(false) }
     var showGridGuides by remember { mutableStateOf(true) }
+    var showFullscreenPreview by remember { mutableStateOf(false) }
+    var previewExportedFile by remember { mutableStateOf<File?>(null) }
     var activeTabIndex by rememberSaveable { mutableIntStateOf(0) }
 
     var ttsEngine by remember { mutableStateOf<TextToSpeech?>(null) }
@@ -203,9 +229,17 @@ fun StudioEditorScreen(
     val currentSceneIndex = scenes.indexOfFirst { it.id == selectedSceneId }.let { if (it >= 0) it else 0 }
     val currentScene = scenes.getOrNull(currentSceneIndex)
 
-    LaunchedEffect(isPlaying, currentScene?.id, scenes.size) {
+    LaunchedEffect(isVoiceoverMuted, playbackSpeed) {
+        ttsEngine?.setSpeechRate(playbackSpeed)
+        if (isVoiceoverMuted) {
+            ttsEngine?.stop()
+        }
+    }
+
+    LaunchedEffect(isPlaying, currentScene?.id, scenes.size, playbackSpeed, isLooping) {
         if (isPlaying && currentScene != null) {
-            if (currentScene.narrationAr.isNotBlank()) {
+            if (!isVoiceoverMuted && currentScene.narrationAr.isNotBlank()) {
+                ttsEngine?.setSpeechRate(playbackSpeed)
                 ttsEngine?.speak(
                     currentScene.narrationAr,
                     TextToSpeech.QUEUE_FLUSH,
@@ -213,10 +247,11 @@ fun StudioEditorScreen(
                     "scene_${currentScene.id}"
                 )
             }
-            val durationMs = (currentScene.durationSeconds.coerceIn(3L, 60L) * 1000L)
+            val durationMs = ((currentScene.durationSeconds.coerceIn(3L, 60L) * 1000L) / playbackSpeed).toLong().coerceAtLeast(500L)
             val stepMs = 50L
             val steps = (durationMs / stepMs).coerceAtLeast(1L)
-            for (step in 0..steps) {
+            val startStep = (playbackProgress * steps).toLong().coerceIn(0L, steps)
+            for (step in startStep..steps) {
                 if (!isPlaying) break
                 playbackProgress = (step.toFloat() / steps.toFloat()).coerceIn(0f, 1f)
                 delay(stepMs)
@@ -226,6 +261,8 @@ fun StudioEditorScreen(
                 val nextIdx = currentSceneIndex + 1
                 if (nextIdx < scenes.size) {
                     onSelectScene(scenes[nextIdx].id)
+                } else if (isLooping && scenes.isNotEmpty()) {
+                    onSelectScene(scenes[0].id)
                 } else {
                     isPlaying = false
                 }
@@ -233,6 +270,58 @@ fun StudioEditorScreen(
         } else {
             ttsEngine?.stop()
         }
+    }
+
+    fun shareMp4File(file: File) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(
+                Intent.createChooser(shareIntent, "مشاركة الفيديو السينمائي")
+            )
+        } catch (_: Exception) {}
+    }
+
+    // Exported MP4 Media3 Preview Modal
+    val exportedFileToPreview = previewExportedFile
+    if (exportedFileToPreview != null) {
+        val firstSceneBmp = currentScene?.let { sceneBitmaps[it.id] } ?: sceneBitmaps.values.firstOrNull()
+        VideoPreviewModalDialog(
+            title = project.title,
+            aspectRatioCode = project.aspectRatio,
+            sourceType = VideoPreviewSourceType.LOCAL_MP4,
+            videoUri = Uri.fromFile(exportedFileToPreview),
+            fallbackThumbnail = firstSceneBmp,
+            fallbackDurationSeconds = scenes.sumOf { it.durationSeconds }.coerceAtLeast(3L),
+            scenes = scenes,
+            sceneBitmaps = sceneBitmaps,
+            onDismiss = { previewExportedFile = null },
+            onShareVideo = { shareMp4File(exportedFileToPreview) }
+        )
+    }
+
+    // Fullscreen Interactive Multi-Scene Preview Modal
+    if (showFullscreenPreview && scenes.isNotEmpty()) {
+        val firstSceneBmp = currentScene?.let { sceneBitmaps[it.id] } ?: sceneBitmaps.values.firstOrNull()
+        VideoPreviewModalDialog(
+            title = project.title,
+            aspectRatioCode = project.aspectRatio,
+            sourceType = VideoPreviewSourceType.AI_SCENE_SEQUENCE,
+            videoUri = null,
+            fallbackThumbnail = firstSceneBmp,
+            fallbackDurationSeconds = scenes.sumOf { it.durationSeconds }.coerceAtLeast(3L),
+            scenes = scenes,
+            sceneBitmaps = sceneBitmaps,
+            onDismiss = { showFullscreenPreview = false }
+        )
     }
 
     val scenePhotoPickerLauncher = rememberLauncherForActivityResult(
@@ -495,54 +584,73 @@ fun StudioEditorScreen(
                                         Icon(imageVector = Icons.Default.Close, contentDescription = "إغلاق", tint = Color.White)
                                     }
                                 }
-                                Row(
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Button(
                                         onClick = {
-                                            try {
-                                                val uri = FileProvider.getUriForFile(
-                                                    context,
-                                                    "${context.packageName}.fileprovider",
-                                                    exportState.file
-                                                )
-                                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                                    type = "video/mp4"
-                                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                }
-                                                context.startActivity(
-                                                    Intent.createChooser(shareIntent, "مشاركة الفيديو السينمائي")
-                                                )
-                                            } catch (_: Exception) {}
+                                            isPlaying = false
+                                            previewExportedFile = exportState.file
                                         },
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = StudioEmerald,
                                             contentColor = StudioObsidian
                                         ),
                                         shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(stringResource(R.string.share_video_btn))
-                                    }
-                                    OutlinedButton(
-                                        onClick = onOpenGalleryAfterExport,
-                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                                         modifier = Modifier
-                                            .weight(1f)
-                                            .testTag("view_in_gallery_button")
+                                            .fillMaxWidth()
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .testTag("preview_exported_mp4_button")
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.VideoLibrary,
-                                            contentDescription = null,
-                                            tint = CinemaGold,
-                                            modifier = Modifier.size(16.dp)
+                                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.preview_mp4_btn),
+                                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(stringResource(R.string.gallery_view_in_gallery), color = CinemaGold)
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { shareMp4File(exportState.file) },
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .defaultMinSize(minHeight = 48.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Share,
+                                                contentDescription = null,
+                                                tint = StudioEmerald,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(stringResource(R.string.share_video_btn), color = StudioEmerald, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        OutlinedButton(
+                                            onClick = onOpenGalleryAfterExport,
+                                            shape = RoundedCornerShape(10.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("view_in_gallery_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.VideoLibrary,
+                                                contentDescription = null,
+                                                tint = CinemaGold,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(stringResource(R.string.gallery_view_in_gallery), color = CinemaGold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
                                     }
                                 }
                             }
@@ -608,21 +716,64 @@ fun StudioEditorScreen(
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = aiTaskState.errorMessage,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(onClick = onClearAiState) {
-                                Icon(imageVector = Icons.Default.Close, contentDescription = "إغلاق", tint = MaterialTheme.colorScheme.error)
+                            Row(
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = aiTaskState.errorMessage,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = onClearAiState) {
+                                    Icon(imageVector = Icons.Default.Close, contentDescription = "إغلاق", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            if (aiTaskState.errorMessage.contains("App Check", ignoreCase = true) ||
+                                aiTaskState.errorMessage.contains("reCAPTCHA", ignoreCase = true) ||
+                                aiTaskState.errorMessage.contains("403")
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onClearAppCheckTestState()
+                                        onRefreshAppCheckDiagnostics()
+                                        showAppCheckDialog = true
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Security,
+                                        contentDescription = null,
+                                        tint = CinemaGold,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "تشخيص وإعداد App Check",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = CinemaGold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
+                    }
+                    if (showAppCheckDialog) {
+                        AppCheckDiagnosticsDialog(
+                            diagnostics = appCheckDiagnostics,
+                            testState = appCheckTestState,
+                            onSaveAndTest = onSaveAndTestAppCheck,
+                            onDismiss = { showAppCheckDialog = false }
+                        )
                     }
                 }
                 is AiTaskState.Completed -> {
@@ -664,55 +815,20 @@ fun StudioEditorScreen(
                 )
 
                 // Transport & Playback Bar
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(StudioCard)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .border(1.dp, StudioElevated, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = {
-                                if (currentSceneIndex > 0) {
-                                    playbackProgress = 0f
-                                    onSelectScene(scenes[currentSceneIndex - 1].id)
-                                }
-                            },
-                            enabled = currentSceneIndex > 0
-                        ) {
-                            Icon(imageVector = Icons.Default.SkipNext, contentDescription = "المشهد السابق", tint = Color.White)
-                        }
-
-                        IconButton(
-                            onClick = { isPlaying = !isPlaying },
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(CinemaGold)
-                                .size(42.dp)
-                                .testTag("play_pause_button")
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "إيقاف مؤقت" else "تشغيل الفيلم",
-                                tint = StudioObsidian
-                            )
-                        }
-
-                        IconButton(
-                            onClick = {
-                                if (currentSceneIndex < scenes.size - 1) {
-                                    playbackProgress = 0f
-                                    onSelectScene(scenes[currentSceneIndex + 1].id)
-                                }
-                            },
-                            enabled = currentSceneIndex < scenes.size - 1
-                        ) {
-                            Icon(imageVector = Icons.Default.SkipPrevious, contentDescription = "المشهد التالي", tint = Color.White)
-                        }
-                    }
+                    val sceneDurationMs = currentScene.durationSeconds.coerceIn(3L, 60L) * 1000L
+                    val sceneElapsedMs = (playbackProgress * sceneDurationMs).toLong()
+                    val totalProjectDurationMs = scenes.sumOf { it.durationSeconds.coerceIn(3L, 60L) * 1000L }
+                    val previousScenesDurationMs = scenes.take(currentSceneIndex).sumOf { it.durationSeconds.coerceIn(3L, 60L) * 1000L }
+                    val totalElapsedMs = previousScenesDurationMs + sceneElapsedMs
 
                     Slider(
                         value = playbackProgress,
@@ -721,20 +837,176 @@ fun StudioEditorScreen(
                             playbackProgress = it
                         },
                         modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
+                            .fillMaxWidth()
+                            .testTag("studio_playback_scrubber"),
                         colors = SliderDefaults.colors(
                             thumbColor = CinemaGold,
-                            activeTrackColor = CinemaGold
+                            activeTrackColor = CinemaGold,
+                            inactiveTrackColor = StudioElevated
                         )
                     )
 
-                    IconButton(onClick = { showGridGuides = !showGridGuides }) {
-                        Icon(
-                            imageVector = Icons.Default.GridOn,
-                            contentDescription = "شبكة الإضاءة والأثلاث",
-                            tint = if (showGridGuides) CinemaGold else MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${formatMediaTimeMs(totalElapsedMs)} / ${formatMediaTimeMs(totalProjectDurationMs)}",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = CinemaGold
                         )
+                        Text(
+                            text = "المشهد ${currentSceneIndex + 1}/${scenes.size} (${formatMediaTimeMs(sceneElapsedMs)} / ${formatMediaTimeMs(sceneDurationMs)})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = StudioCyan
+                        )
+                    }
+
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    if (currentSceneIndex > 0) {
+                                        playbackProgress = 0f
+                                        onSelectScene(scenes[currentSceneIndex - 1].id)
+                                    }
+                                },
+                                enabled = currentSceneIndex > 0,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.SkipNext, contentDescription = "المشهد السابق", tint = Color.White)
+                            }
+
+                            IconButton(
+                                onClick = { isPlaying = !isPlaying },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(CinemaGold)
+                                    .testTag("play_pause_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (isPlaying) "إيقاف مؤقت" else "تشغيل الفيلم",
+                                    tint = StudioObsidian
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    if (currentSceneIndex < scenes.size - 1) {
+                                        playbackProgress = 0f
+                                        onSelectScene(scenes[currentSceneIndex + 1].id)
+                                    }
+                                },
+                                enabled = currentSceneIndex < scenes.size - 1,
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.SkipPrevious, contentDescription = "المشهد التالي", tint = Color.White)
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { isVoiceoverMuted = !isVoiceoverMuted },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("studio_mute_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isVoiceoverMuted) {
+                                        Icons.AutoMirrored.Filled.VolumeOff
+                                    } else {
+                                        Icons.AutoMirrored.Filled.VolumeUp
+                                    },
+                                    contentDescription = if (isVoiceoverMuted) {
+                                        stringResource(R.string.playback_unmute_toggle)
+                                    } else {
+                                        stringResource(R.string.playback_mute_toggle)
+                                    },
+                                    tint = if (isVoiceoverMuted) MaterialTheme.colorScheme.onSurfaceVariant else StudioCyan
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { isLooping = !isLooping },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("studio_loop_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isLooping) Icons.Default.RepeatOn else Icons.Default.Repeat,
+                                    contentDescription = stringResource(R.string.playback_loop_toggle),
+                                    tint = if (isLooping) CinemaGold else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            Surface(
+                                onClick = {
+                                    playbackSpeed = when (playbackSpeed) {
+                                        0.5f -> 1f
+                                        1f -> 1.5f
+                                        1.5f -> 2f
+                                        else -> 0.5f
+                                    }
+                                },
+                                color = StudioElevated,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                                    .testTag("studio_speed_button")
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    val speedLabel = if (playbackSpeed % 1f == 0f) {
+                                        "${playbackSpeed.toInt()}x"
+                                    } else {
+                                        "${playbackSpeed}x"
+                                    }
+                                    Text(
+                                        text = speedLabel,
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = CinemaGold
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { showGridGuides = !showGridGuides },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridOn,
+                                    contentDescription = "شبكة الإضاءة والأثلاث",
+                                    tint = if (showGridGuides) CinemaGold else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    isPlaying = false
+                                    showFullscreenPreview = true
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("studio_fullscreen_preview_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Fullscreen,
+                                    contentDescription = stringResource(R.string.preview_fullscreen_btn),
+                                    tint = Color.White
+                                )
+                            }
+                        }
                     }
                 }
 

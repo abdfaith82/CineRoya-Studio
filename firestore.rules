@@ -77,6 +77,8 @@ service cloud.firestore {
              data.colorGradePreset is string && data.colorGradePreset.size() >= 1 && data.colorGradePreset.size() <= 80 &&
              data.thumbnailBase64 is string && data.thumbnailBase64.size() <= 120000 &&
              data.localFilePath is string && data.localFilePath.size() <= 500 &&
+             (!('videoUrl' in data.keys()) || (data.videoUrl is string && data.videoUrl.size() <= 1000)) &&
+             (!('mediaMimeType' in data.keys()) || (data.mediaMimeType is string && data.mediaMimeType.size() <= 100)) &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -173,7 +175,8 @@ service cloud.firestore {
                        incoming().keys().hasOnly([
                          'userId', 'projectId', 'title', 'genre', 'aspectRatio',
                          'durationSeconds', 'sceneCount', 'colorGradePreset',
-                         'thumbnailBase64', 'localFilePath', 'createdAt', 'updatedAt'
+                         'thumbnailBase64', 'localFilePath', 'videoUrl', 'mediaMimeType',
+                         'createdAt', 'updatedAt'
                        ]) &&
                        isValidGeneratedVideo(incoming(), userId);
 
@@ -184,7 +187,7 @@ service cloud.firestore {
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'title', 'thumbnailBase64', 'localFilePath', 'updatedAt'
+                         'title', 'thumbnailBase64', 'localFilePath', 'videoUrl', 'mediaMimeType', 'updatedAt'
                        ]);
 
       allow delete: if isOwner(userId) && isValidId(userId) && isValidId(videoId);

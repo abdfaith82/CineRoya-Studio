@@ -221,6 +221,14 @@
           "type": "string",
           "description": "Device file path of the exported MP4 video."
         },
+        "videoUrl": {
+          "type": "string",
+          "description": "Optional backend or cloud streaming URL for the generated MP4 video."
+        },
+        "mediaMimeType": {
+          "type": "string",
+          "description": "MIME type of the generated media (e.g. video/mp4)."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",

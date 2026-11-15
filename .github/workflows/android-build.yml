@@ -38,6 +38,28 @@ jobs:
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           fi
 
+      - name: Configure Optional App Check & Firebase Overrides from Secrets
+        env:
+          CI_APPCHECK_DEBUG_TOKEN: ${{ secrets.FIREBASE_APPCHECK_DEBUG_TOKEN }}
+          CI_RECAPTCHA_SITE_KEY: ${{ secrets.RECAPTCHA_SITE_KEY }}
+          CI_FIRESTORE_DATABASE_ID: ${{ secrets.FIRESTORE_DATABASE_ID }}
+        run: |
+          if [ -n "$CI_APPCHECK_DEBUG_TOKEN" ] || [ -n "$CI_RECAPTCHA_SITE_KEY" ] || [ -n "$CI_FIRESTORE_DATABASE_ID" ]; then
+            {
+              printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+              if [ -n "$CI_APPCHECK_DEBUG_TOKEN" ]; then
+                printf '    <string name="ci_appcheck_debug_token" translatable="false">%s</string>\n' "$CI_APPCHECK_DEBUG_TOKEN"
+              fi
+              if [ -n "$CI_RECAPTCHA_SITE_KEY" ]; then
+                printf '    <string name="ci_recaptcha_site_key" translatable="false">%s</string>\n' "$CI_RECAPTCHA_SITE_KEY"
+              fi
+              if [ -n "$CI_FIRESTORE_DATABASE_ID" ]; then
+                printf '    <string name="ci_firestore_database_id" translatable="false">%s</string>\n' "$CI_FIRESTORE_DATABASE_ID"
+              fi
+              printf '</resources>\n'
+            } > app/src/main/res/values/ci_appcheck_config.xml
+          fi
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
