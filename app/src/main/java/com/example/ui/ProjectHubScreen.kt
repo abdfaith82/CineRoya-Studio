@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -76,6 +78,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
@@ -129,6 +132,7 @@ fun ProjectHubScreen(
     referenceBitmap: android.graphics.Bitmap?,
     onSetReferenceBitmap: (android.graphics.Bitmap?) -> Unit,
     onGenerateProject: (ideaPrompt: String, genre: String, aspectRatio: String, visualStyle: String, sceneCount: Int) -> Unit,
+    onCreateManualProject: (ideaPrompt: String, genre: String, aspectRatio: String, visualStyle: String, sceneCount: Int) -> Unit,
     onOpenProject: (VideoProject) -> Unit,
     onDeleteProject: (String) -> Unit,
     onClearAiState: () -> Unit,
@@ -257,19 +261,19 @@ fun ProjectHubScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(155.dp)
+                        .heightIn(min = 155.dp)
                         .clip(RoundedCornerShape(20.dp))
                         .border(1.dp, CinemaGold.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.img_studio_hero_1794558142941),
                         contentDescription = stringResource(R.string.studio_title),
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.matchParentSize(),
                         contentScale = ContentScale.Crop
                     )
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
+                            .matchParentSize()
                             .background(
                                 Brush.horizontalGradient(
                                     colors = listOf(
@@ -622,16 +626,44 @@ fun ProjectHubScreen(
                                 contentColor = StudioObsidian
                             ),
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(54.dp)
+                                .defaultMinSize(minHeight = 56.dp)
                                 .testTag("generate_long_video_button")
                         ) {
                             Icon(imageVector = Icons.Default.MovieFilter, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = stringResource(R.string.generate_long_video_btn),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                onCreateManualProject(
+                                    promptText,
+                                    selectedGenre,
+                                    selectedAspectRatio,
+                                    selectedVisualStyle,
+                                    requestedScenes
+                                )
+                            },
+                            enabled = aiTaskState !is AiTaskState.Running,
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .defaultMinSize(minHeight = 48.dp)
+                                .testTag("create_manual_project_button")
+                        ) {
+                            Text(
+                                text = "إنشاء مشروع تحرير يدوي بالخط الزمني (بدون AI)",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = StudioCyan,
+                                textAlign = TextAlign.Center
                             )
                         }
                     }

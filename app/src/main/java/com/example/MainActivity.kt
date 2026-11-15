@@ -239,6 +239,7 @@ private fun StudioSessionContainer(
                     referenceBitmap = referenceBitmap,
                     onSetReferenceBitmap = viewModel::setReferenceBitmap,
                     onGenerateProject = viewModel::generateFullAiProjectFromPrompt,
+                    onCreateManualProject = viewModel::createManualProjectFromIdea,
                     onOpenProject = viewModel::openProject,
                     onDeleteProject = viewModel::deleteProject,
                     onClearAiState = viewModel::clearAiTaskState,

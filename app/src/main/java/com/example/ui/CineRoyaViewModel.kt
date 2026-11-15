@@ -17,6 +17,7 @@ import com.example.model.GeneratedVideo
 import com.example.model.VideoProject
 import com.example.model.VideoScene
 import com.example.util.Mp4VideoExporter
+import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
@@ -226,6 +227,132 @@ class CineRoyaViewModel(
         _selectedSceneId.value = sceneId
     }
 
+    private fun isFirebaseInitialized(): Boolean =
+        runCatching { FirebaseApp.getInstance() }.isSuccess
+
+    private fun formatAiError(error: Exception, fallbackAr: String): String {
+        val raw = error.localizedMessage.orEmpty()
+        return if (raw.contains("FirebaseApp is not initialized", ignoreCase = true) || !isFirebaseInitialized()) {
+            "ملف «google-services.json» غير مدمج في هذه النسخة، لذا خدمات Gemini AI متوقفة مؤقتاً. أضف الملف في مجلد app أو عبر سر GOOGLE_SERVICES_JSON في GitHub ثم أعد البناء، أو أنشئ مشروعاً يدوياً أدناه."
+        } else {
+            raw.ifBlank { fallbackAr }
+        }
+    }
+
+    fun createManualProjectFromIdea(
+        ideaPrompt: String,
+        genre: String,
+        aspectRatio: String,
+        visualStyle: String,
+        requestedScenes: Int
+    ) {
+        val cleanText = ideaPrompt.trim().ifBlank { "مشروع سينمائي جديد" }
+        val count = requestedScenes.coerceIn(3, 8)
+        val generatedTitle = cleanText.lineSequence().firstOrNull()?.take(48)?.trim().orEmpty()
+            .ifBlank { "مشروع $genre" }
+
+        viewModelScope.launch {
+            val baseSceneTitles = List(count) { idx ->
+                when (idx) {
+                    0 -> "المشهد الافتتاحي"
+                    count - 1 -> "المشهد الختامي"
+                    else -> "المشهد التتابعي ${idx + 1}"
+                }
+            }
+            val defaultScenes = baseSceneTitles.mapIndexed { idx, heading ->
+                VideoScene(
+                    sceneIndex = idx.toLong(),
+                    title = "$heading • $generatedTitle",
+                    narrationAr = if (idx == 0) cleanText else "استكمال سرد المشهد ${idx + 1} من القصة السينمائية.",
+                    visualPrompt = "$visualStyle cinematic shot for $genre, 8K photorealistic lighting",
+                    durationSeconds = 10L,
+                    cameraMovement = if (idx % 2 == 0) "DOLLY_FORWARD" else "PAN_RIGHT",
+                    transitionType = if (idx == count - 1) "DIP_TO_BLACK" else "CROSSFADE",
+                    colorGradePreset = "CINEMATIC_GOLD",
+                    cameraShotAngle = if (idx == 0) "AERIAL_DRONE" else "EYE_LEVEL",
+                    cameraPitchDeg = if (idx == 0) 35L else 0L,
+                    lensFocalMm = if (idx == 0) 24L else 35L
+                )
+            }
+            val totalDuration = defaultScenes.sumOf { it.durationSeconds }
+
+            if (isGuestMode || repository == null) {
+                val projectId = "guest_manual_${UUID.randomUUID().toString().take(8)}"
+                val newProject = VideoProject(
+                    id = projectId,
+                    userId = "guest",
+                    title = generatedTitle,
+                    synopsis = cleanText,
+                    genre = genre,
+                    aspectRatio = aspectRatio,
+                    visualStyle = visualStyle,
+                    targetDurationSeconds = totalDuration,
+                    sceneCount = defaultScenes.size.toLong(),
+                    globalLightingPreset = "CINEMATIC_GOLD",
+                    createdAt = Timestamp.now(),
+                    updatedAt = Timestamp.now()
+                )
+                val createdScenes = defaultScenes.mapIndexed { idx, s ->
+                    val sceneId = "guest_scene_${UUID.randomUUID().toString().take(8)}"
+                    _sceneCameraExtras.value = _sceneCameraExtras.value + (
+                        sceneId to Triple(s.cameraShotAngle, s.cameraPitchDeg, s.lensFocalMm)
+                    )
+                    s.copy(
+                        id = sceneId,
+                        userId = "guest",
+                        projectId = projectId,
+                        sceneIndex = idx.toLong(),
+                        createdAt = Timestamp.now(),
+                        updatedAt = Timestamp.now()
+                    )
+                }
+                _guestProjects.value = listOf(newProject) + _guestProjects.value
+                _guestScenesByProject.value = _guestScenesByProject.value + (projectId to createdScenes)
+                openProject(newProject)
+                _aiTaskState.value = AiTaskState.Completed("تم إنشاء المشروع اليدوي بنجاح! يمكنك التعديل وإضافة الصور وتصدير MP4.")
+            } else {
+                try {
+                    val projectId = repository.createProject(
+                        title = generatedTitle,
+                        synopsis = cleanText,
+                        genre = genre,
+                        aspectRatio = aspectRatio,
+                        visualStyle = visualStyle,
+                        targetDurationSeconds = totalDuration,
+                        sceneCount = defaultScenes.size.toLong(),
+                        globalLightingPreset = "CINEMATIC_GOLD"
+                    ).getOrThrow()
+                    for ((idx, scene) in defaultScenes.withIndex()) {
+                        val sceneId = repository.createScene(
+                            projectId = projectId,
+                            scene = scene.copy(sceneIndex = idx.toLong())
+                        ).getOrThrow()
+                        _sceneCameraExtras.value = _sceneCameraExtras.value + (
+                            sceneId to Triple(scene.cameraShotAngle, scene.cameraPitchDeg, scene.lensFocalMm)
+                        )
+                    }
+                    val newProject = VideoProject(
+                        id = projectId,
+                        title = generatedTitle,
+                        synopsis = cleanText,
+                        genre = genre,
+                        aspectRatio = aspectRatio,
+                        visualStyle = visualStyle,
+                        targetDurationSeconds = totalDuration,
+                        sceneCount = defaultScenes.size.toLong(),
+                        globalLightingPreset = "CINEMATIC_GOLD"
+                    )
+                    openProject(newProject)
+                    _aiTaskState.value = AiTaskState.Completed("تم إنشاء المشروع اليدوي بنجاح!")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _aiTaskState.value = AiTaskState.Failed(e.localizedMessage ?: "تعذر إنشاء المشروع.")
+                }
+            }
+        }
+    }
+
     fun generateFullAiProjectFromPrompt(
         ideaPrompt: String,
         genre: String,
@@ -235,6 +362,12 @@ class CineRoyaViewModel(
     ) {
         if (ideaPrompt.isBlank()) {
             _aiTaskState.value = AiTaskState.Failed("يرجى كتابة فكرة أو نص الفيديو أولاً.")
+            return
+        }
+        if (!isFirebaseInitialized()) {
+            _aiTaskState.value = AiTaskState.Failed(
+                formatAiError(IllegalStateException("FirebaseApp is not initialized"), "")
+            )
             return
         }
 
@@ -334,12 +467,18 @@ class CineRoyaViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to generate storyboard", e)
-                _aiTaskState.value = AiTaskState.Failed(e.localizedMessage ?: "فشل توليد السيناريو بالذكاء الاصطناعي.")
+                _aiTaskState.value = AiTaskState.Failed(formatAiError(e, "فشل توليد السيناريو بالذكاء الاصطناعي."))
             }
         }
     }
 
     fun generateAiFrameForScene(scene: VideoScene, useReferencePhoto: Boolean = false) {
+        if (!isFirebaseInitialized()) {
+            _aiTaskState.value = AiTaskState.Failed(
+                formatAiError(IllegalStateException("FirebaseApp is not initialized"), "")
+            )
+            return
+        }
         viewModelScope.launch {
             _aiTaskState.value = AiTaskState.Running("جاري توليد اللقطة الواقعية 8K وتطبيق زاوية الكاميرا والإضاءة للمشهد (${scene.title})... قد يستغرق 30-60 ثانية")
             try {
@@ -363,7 +502,7 @@ class CineRoyaViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Scene frame generation failed", e)
-                _aiTaskState.value = AiTaskState.Failed(e.localizedMessage ?: "تعذر توليد لقطة المشهد.")
+                _aiTaskState.value = AiTaskState.Failed(formatAiError(e, "تعذر توليد لقطة المشهد."))
             }
         }
     }
@@ -372,6 +511,12 @@ class CineRoyaViewModel(
         val project = _selectedProject.value ?: return
         val scenes = (_scenesState.value as? DataUiState.Success)?.data ?: emptyList()
         if (scenes.isEmpty()) return
+        if (!isFirebaseInitialized()) {
+            _aiTaskState.value = AiTaskState.Failed(
+                formatAiError(IllegalStateException("FirebaseApp is not initialized"), "")
+            )
+            return
+        }
 
         viewModelScope.launch {
             _aiTaskState.value = AiTaskState.Running("جاري توليد وثيقة تسلسل موجهات الفيديو (Prompt Sequence) عبر Gemini AI...")
@@ -387,7 +532,7 @@ class CineRoyaViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to generate prompt sequence", e)
-                _aiTaskState.value = AiTaskState.Failed(e.localizedMessage ?: "تعذر توليد تسلسل الموجهات.")
+                _aiTaskState.value = AiTaskState.Failed(formatAiError(e, "تعذر توليد تسلسل الموجهات."))
             }
         }
     }
@@ -400,6 +545,12 @@ class CineRoyaViewModel(
     fun enhanceSceneWithAiDirector(scene: VideoScene, instructionAr: String) {
         if (instructionAr.isBlank()) {
             _aiTaskState.value = AiTaskState.Failed("يرجى كتابة توجيه التعديل أولاً.")
+            return
+        }
+        if (!isFirebaseInitialized()) {
+            _aiTaskState.value = AiTaskState.Failed(
+                formatAiError(IllegalStateException("FirebaseApp is not initialized"), "")
+            )
             return
         }
         viewModelScope.launch {
@@ -417,7 +568,7 @@ class CineRoyaViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to enhance scene", e)
-                _aiTaskState.value = AiTaskState.Failed(e.localizedMessage ?: "تعذر تحسين المشهد.")
+                _aiTaskState.value = AiTaskState.Failed(formatAiError(e, "تعذر تحسين المشهد."))
             }
         }
     }

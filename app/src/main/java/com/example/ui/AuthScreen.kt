@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -154,13 +155,13 @@ fun onGoogleSignInClicked(
         com.google.firebase.FirebaseApp.getApps(context).isNotEmpty()
     }.getOrDefault(false)
     if (!firebaseReady) {
-        onAuthError("ملف google-services.json غير مدمج في هذه النسخة. يمكنك استخدام الدخول بدون حساب أو إعادة البناء مع google-services.json.")
+        onAuthError("ملف «google-services.json» غير مدمج في هذه النسخة. يمكنك الدخول بدون حساب الآن، أو إضافة الملف في مجلد app أو عبر السر GOOGLE_SERVICES_JSON في GitHub ثم إعادة البناء.")
         return
     }
 
     val clientId = resolveDefaultWebClientId(context)
     if (clientId == null) {
-        onAuthError("إعدادات Google Sign-In غير مكتملة (يرجى التأكد من ملف google-services.json).")
+        onAuthError("إعدادات Google Sign-In غير مكتملة (يرجى التأكد من ملف «google-services.json»).")
         return
     }
 
@@ -383,9 +384,10 @@ fun AuthScreen(
                     contentColor = StudioObsidian
                 ),
                 shape = RoundedCornerShape(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
+                    .defaultMinSize(minHeight = 54.dp)
                     .testTag("google_sign_in_button")
             ) {
                 if (isLoading) {
@@ -397,7 +399,8 @@ fun AuthScreen(
                 } else {
                     Text(
                         text = stringResource(R.string.auth_google_button),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        textAlign = TextAlign.Center
                     )
                 }
             }
@@ -409,9 +412,10 @@ fun AuthScreen(
                 enabled = !isLoading,
                 border = BorderStroke(1.5.dp, StudioCyan),
                 shape = RoundedCornerShape(16.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
+                    .defaultMinSize(minHeight = 54.dp)
                     .testTag("guest_sign_in_button")
             ) {
                 Icon(
@@ -423,7 +427,8 @@ fun AuthScreen(
                 Text(
                     text = stringResource(R.string.auth_guest_button),
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = StudioCyan
+                    color = StudioCyan,
+                    textAlign = TextAlign.Center
                 )
             }
 

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -110,6 +111,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -1239,26 +1241,32 @@ private fun AiSceneSynthesisTab(
                 contentColor = StudioObsidian
             ),
             shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             modifier = Modifier
                 .weight(1f)
-                .height(48.dp)
+                .defaultMinSize(minHeight = 48.dp)
                 .testTag("generate_scene_frame_button")
         ) {
             Icon(imageVector = Icons.Default.CameraEnhance, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text(stringResource(R.string.generate_8k_frame_btn), style = MaterialTheme.typography.labelLarge)
+            Text(
+                text = stringResource(R.string.generate_8k_frame_btn),
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center
+            )
         }
 
         OutlinedButton(
             onClick = onPickPhotoForScene,
             shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             modifier = Modifier
-                .height(48.dp)
+                .defaultMinSize(minHeight = 48.dp)
                 .testTag("scene_pick_photo_button")
         ) {
             Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null, tint = StudioCyan)
             Spacer(modifier = Modifier.width(6.dp))
-            Text(stringResource(R.string.pick_device_photo_btn), color = Color.White)
+            Text(stringResource(R.string.pick_device_photo_btn), color = Color.White, textAlign = TextAlign.Center)
         }
     }
 
@@ -1266,9 +1274,10 @@ private fun AiSceneSynthesisTab(
         onClick = onGeneratePromptSequence,
         enabled = !isAiBusy,
         shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(46.dp)
+            .defaultMinSize(minHeight = 48.dp)
             .testTag("generate_prompt_sequence_button")
     ) {
         Icon(imageVector = Icons.Default.Description, contentDescription = null, tint = CinemaGold)
@@ -1276,7 +1285,8 @@ private fun AiSceneSynthesisTab(
         Text(
             text = stringResource(R.string.generate_prompt_seq_btn),
             color = CinemaGold,
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelLarge,
+            textAlign = TextAlign.Center
         )
     }
 
@@ -1671,16 +1681,18 @@ private fun ArabicScriptAndVoiceTab(
             contentColor = StudioObsidian
         ),
         shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .defaultMinSize(minHeight = 48.dp)
             .testTag("tts_preview_button")
     ) {
         Icon(imageVector = Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null)
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = stringResource(R.string.tts_preview_btn),
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelLarge,
+            textAlign = TextAlign.Center
         )
     }
 }
