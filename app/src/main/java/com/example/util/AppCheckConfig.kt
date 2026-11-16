@@ -38,6 +38,7 @@ private const val KEY_CUSTOM_DEBUG_TOKEN = "custom_debug_token"
 private const val KEY_CUSTOM_RECAPTCHA_SITE_KEY = "custom_recaptcha_site_key"
 
 private const val DEFAULT_AI_STUDIO_PROJECT_ID = "gen-lang-client-0583048643"
+private const val EXPECTED_REGISTERED_SHA1 = "DE:65:8D:87:9B:EB:AC:41:FF:25:7D:20:3B:13:D4:06:27:F4:20:1E"
 
 data class AppCheckDiagnostics(
     val isFirebaseInitialized: Boolean,
@@ -46,6 +47,8 @@ data class AppCheckDiagnostics(
     val firebaseAppId: String,
     val signingSha1: String,
     val signingSha256: String,
+    val expectedRegisteredSha1: String,
+    val hasSigningSha1Mismatch: Boolean,
     val activeProviderMode: String,
     val activeModeLabelAr: String,
     val siteKeyPreview: String,
@@ -218,9 +221,15 @@ fun getAppCheckDiagnostics(context: Context): AppCheckDiagnostics {
     val defaultSiteKey = resolveStringResource(context, RECAPTCHA_SITE_KEY_RES)
 
     val storedDebugUuid = if (app != null) {
-        context.getSharedPreferences("$DEBUG_STORE_PREFIX${app.persistenceKey}", Context.MODE_PRIVATE)
-            .getString(DEBUG_SECRET_KEY, "")
-            .orEmpty()
+        val prefs = context.getSharedPreferences("$DEBUG_STORE_PREFIX${app.persistenceKey}", Context.MODE_PRIVATE)
+        val existing = prefs.getString(DEBUG_SECRET_KEY, "").orEmpty()
+        if (existing.isBlank() && BuildConfig.DEBUG) {
+            val generated = UUID.randomUUID().toString()
+            prefs.edit().putString(DEBUG_SECRET_KEY, generated).commit()
+            generated
+        } else {
+            existing
+        }
     } else {
         ""
     }
@@ -258,6 +267,9 @@ fun getAppCheckDiagnostics(context: Context): AppCheckDiagnostics {
         ciSiteKey.isNullOrBlank() &&
         !defaultSiteKey.isNullOrBlank()
 
+    val hasSigningSha1Mismatch = sha1 != "غير متاح" &&
+        !sha1.equals(EXPECTED_REGISTERED_SHA1, ignoreCase = true)
+
     return AppCheckDiagnostics(
         isFirebaseInitialized = app != null,
         projectId = projectId,
@@ -265,6 +277,8 @@ fun getAppCheckDiagnostics(context: Context): AppCheckDiagnostics {
         firebaseAppId = app?.options?.applicationId ?: "غير متاح",
         signingSha1 = sha1,
         signingSha256 = sha256,
+        expectedRegisteredSha1 = EXPECTED_REGISTERED_SHA1,
+        hasSigningSha1Mismatch = hasSigningSha1Mismatch,
         activeProviderMode = activeMode,
         activeModeLabelAr = activeModeLabelAr,
         siteKeyPreview = siteKeyPreview,
@@ -292,10 +306,21 @@ suspend fun verifyAppCheckToken(
 
     val diagnostics = getAppCheckDiagnostics(context)
     return try {
-        val result = withTimeout(15_000L) {
+        var result = withTimeout(15_000L) {
             FirebaseAppCheck.getInstance().getAppCheckToken(forceRefresh).await()
         }
-        val token = result.token
+        var token = result.token
+        var dummyError = if (token.isNotBlank()) extractDummyTokenError(token) else "Empty App Check token"
+
+        // If a cached dummy error token was returned when forceRefresh == false, refresh once from server
+        if (dummyError != null && !forceRefresh) {
+            result = withTimeout(15_000L) {
+                FirebaseAppCheck.getInstance().getAppCheckToken(true).await()
+            }
+            token = result.token
+            dummyError = if (token.isNotBlank()) extractDummyTokenError(token) else "Empty App Check token"
+        }
+
         if (token.isBlank()) {
             return AppCheckTokenVerification.Failed(
                 userMessageAr = "لم يرجع Firebase App Check أي رمز تحقق.",
@@ -305,7 +330,6 @@ suspend fun verifyAppCheckToken(
 
         // Firebase App Check SDK wraps internal provider/exchange failures into a dummy
         // base64 JSON error token instead of always throwing. Detect & decode it cleanly.
-        val dummyError = extractDummyTokenError(token)
         if (dummyError != null) {
             Log.e(TAG, "App Check returned dummy error token: $dummyError")
             return buildDiagnosticFailure(context, diagnostics, dummyError)
@@ -338,10 +362,14 @@ private fun buildDiagnosticFailure(
 ): AppCheckTokenVerification.Failed {
     val msg = buildString {
         append("تعذر الحصول على رمز تحقق App Check صالح عبر (${diagnostics.activeModeLabelAr}).\n")
-        if (diagnostics.hasProjectMismatchWarning) {
-            append("• تنبيه: ملف google-services.json يخص المشروع (${diagnostics.projectId}) بينما مفتاح reCAPTCHA المدمج يخص مشروعاً آخر. أدخل مفتاح reCAPTCHA Android الخاص بمشروعك أو فعّل رمز التصحيح (Debug Token) من زر «فحص وإعداد App Check».\n")
+        if (diagnostics.hasSigningSha1Mismatch) {
+            append("• سبب رئيسي مكتشف: هذا الـ APK موقّع ببصمة مختلفة (${diagnostics.signingSha1}) عن البصمة المسجلة في المشروع (${diagnostics.expectedRegisteredSha1}) لأن ملف debug.keystore.base64 غير مطابق أو لم يُرفع عند البناء.\n")
+            append("• الحل الفوري بدون إعادة بناء: افتح «تشخيص وإعداد App Check» أدناه، اختر وضع Debug Token، انسخ رمز UUID وأضفه في Firebase Console > App Check > Apps > Manage debug tokens.\n")
+            append("• الحل الدائم في GitHub: تأكد من وجود ملف debug.keystore.base64 (أو سر DEBUG_KEYSTORE_BASE64 / FIREBASE_APPCHECK_DEBUG_TOKEN) ثم أعد بناء APK.\n")
+        } else if (diagnostics.hasProjectMismatchWarning) {
+            append("• تنبيه: ملف google-services.json يخص المشروع (${diagnostics.projectId}) بينما مفتاح reCAPTCHA المدمج يخص مشروعاً آخر. أدخل مفتاح reCAPTCHA Android الخاص بمشروعك أو فعّل رمز التصحيح (Debug Token) من زر «تشخيص وإعداد App Check».\n")
         } else if (diagnostics.activeProviderMode == "recaptcha") {
-            append("• عند تثبيت نسخة Debug خارج متجر Google Play أو خارج محاكي AI Studio، غالباً يرفض الخادم رمز reCAPTCHA لنسخ Debug ما لم تسجل رمز التصحيح (Debug Token) في Firebase Console أو تستخدم مفتاح reCAPTCHA Android مطابق لتوقيع APK.\n")
+            append("• عند تثبيت نسخة Debug خارج متجر Google Play أو خارج محاكي AI Studio، قد يرفض الخادم تحقق reCAPTCHA لنسخ Debug. افتح زر «تشخيص وإعداد App Check» أدناه واختر وضع Debug Token وانسخ الرمز إلى Firebase Console.\n")
         } else {
             append("• تأكد من تسجيل رمز التصحيح (Debug Token) لهذا الجهاز في Firebase Console > App Check > Apps > Manage debug tokens.\n")
         }

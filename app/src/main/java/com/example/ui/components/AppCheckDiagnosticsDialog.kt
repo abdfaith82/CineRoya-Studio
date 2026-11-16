@@ -9,6 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -67,6 +69,7 @@ import com.example.ui.theme.StudioEmerald
 import com.example.ui.theme.StudioObsidian
 import com.example.util.AppCheckDiagnostics
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AppCheckDiagnosticsDialog(
     diagnostics: AppCheckDiagnostics?,
@@ -150,7 +153,55 @@ fun AppCheckDiagnosticsDialog(
                         }
                     }
 
-                    if (diagnostics.hasProjectMismatchWarning) {
+                    if (diagnostics.hasSigningSha1Mismatch) {
+                        Surface(
+                            color = CinemaGold.copy(alpha = 0.14f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, CinemaGold.copy(alpha = 0.55f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "عدم تطابق توقيع APK:\n• بصمة هذا APK: ${diagnostics.signingSha1}\n• البصمة المسجلة في Firebase: ${diagnostics.expectedRegisteredSha1}\nلتشغيل AI فوراً على هذه النسخة، انتقل إلى وضع Debug Token أدناه وانسخ الرمز إلى Firebase Console، أو أعد بناء APK مع ملف debug.keystore.base64.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = CinemaGold
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        selectedMode = "debug"
+                                        val tokenToCopy = debugTokenInput.ifBlank { diagnostics.deviceDebugUuid }
+                                        if (tokenToCopy.isNotBlank()) {
+                                            debugTokenInput = tokenToCopy
+                                            copyToClipboard(context, "App Check Debug Token", tokenToCopy)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .defaultMinSize(minHeight = 48.dp)
+                                        .testTag("quick_switch_debug_token_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = null,
+                                        tint = CinemaGold,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "التبديل لوضع Debug Token ونسخ الرمز",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = CinemaGold,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    } else if (diagnostics.hasProjectMismatchWarning) {
                         Surface(
                             color = MaterialTheme.colorScheme.error.copy(alpha = 0.16f),
                             shape = RoundedCornerShape(12.dp),
@@ -173,9 +224,10 @@ fun AppCheckDiagnosticsDialog(
                     color = CinemaGold
                 )
 
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     FilterChip(
                         selected = selectedMode == "auto",
@@ -189,7 +241,12 @@ fun AppCheckDiagnosticsDialog(
                     )
                     FilterChip(
                         selected = selectedMode == "debug",
-                        onClick = { selectedMode = "debug" },
+                        onClick = {
+                            selectedMode = "debug"
+                            if (debugTokenInput.isBlank() && !diagnostics?.deviceDebugUuid.isNullOrBlank()) {
+                                debugTokenInput = diagnostics!!.deviceDebugUuid
+                            }
+                        },
                         label = { Text("Debug Token") },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = StudioCyan.copy(alpha = 0.22f),
@@ -238,7 +295,7 @@ fun AppCheckDiagnosticsDialog(
                             .testTag("appcheck_debug_token_input")
                     )
                     Text(
-                        text = "لتشغيل AI على نسخة Debug مجمعة عبر GitHub: انسخ رمز UUID أعلاه وأضفه في Firebase Console > App Check > Apps > Manage debug tokens.",
+                        text = "لتشغيل AI على هذه النسخة:\n1) انسخ رمز UUID أعلاه.\n2) افتح Firebase Console ← App Check ← Apps ← Manage debug tokens وأضف الرمز.\n3) اضغط «حفظ وفحص الاتصال» أدناه.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
